@@ -1,0 +1,111 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // ============================================
+    // Helper Functions
+    // ============================================
+
+    // Check if user is authenticated
+    function isAuthenticated() {
+      return request.auth != null;
+    }
+
+    // Check if the user owns this document
+    function isOwner(userId) {
+      return request.auth.uid == userId;
+    }
+
+    // Check if user is accessing their own data
+    function isUserDoc(userId) {
+      return request.auth.uid == userId;
+    }
+
+    // ============================================
+    // Documents Collection
+    // ============================================
+    match /documents/{docId} {
+      // User can read only their own documents
+      allow read: if isAuthenticated() && isOwner(resource.data.userId);
+
+      // User can create documents (must set userId to their own uid)
+      allow create: if isAuthenticated()
+        && request.resource.data.userId == request.auth.uid
+        && request.resource.data.userId != null
+        && request.resource.data.fileName != null
+        && request.resource.data.fileType != null
+        && request.resource.data.fileSize >= 0
+        && request.resource.data.language != null
+        && request.resource.data.status in ['uploading', 'processing', 'completed', 'error'];
+
+      // User can update only their own documents
+      allow update: if isAuthenticated() && isOwner(resource.data.userId)
+        && (
+          request.resource.data.userId == resource.data.userId  // userId cannot change
+          && request.resource.data.fileName == resource.data.fileName  // fileName cannot change
+          && request.resource.data.fileType == resource.data.fileType  // fileType cannot change
+          && request.resource.data.fileSize == resource.data.fileSize  // fileSize cannot change
+          && request.resource.data.language == resource.data.language  // language cannot change
+        );
+
+      // User can delete only their own documents
+      allow delete: if isAuthenticated() && isOwner(resource.data.userId);
+
+      // List documents (used in queries with userId filter)
+      allow list: if isAuthenticated();
+    }
+
+    // ============================================
+    // Chat Messages Collection
+    // ============================================
+    match /chatMessages/{messageId} {
+      // User can read only their own chat messages
+      allow read: if isAuthenticated() && isOwner(resource.data.userId);
+
+      // User can create chat messages for themselves
+      allow create: if isAuthenticated()
+        && request.resource.data.userId == request.auth.uid
+        && request.resource.data.userId != null
+        && request.resource.data.role in ['user', 'assistant']
+        && request.resource.data.content != null
+        && request.resource.data.language != null
+        && (request.resource.data.documentId == null || request.resource.data.documentId is string);
+
+      // User cannot update chat messages (immutable by design)
+      allow update: if false;
+
+      // User can delete only their own chat messages
+      allow delete: if isAuthenticated() && isOwner(resource.data.userId);
+
+      // List messages (used in queries with userId filter)
+      allow list: if isAuthenticated();
+    }
+
+    // ============================================
+    // User Preferences Collection
+    // ============================================
+    match /userPreferences/{userId} {
+      // User can only read their own preferences
+      allow read: if isAuthenticated() && isUserDoc(userId);
+
+      // User can create their preferences
+      allow create: if isAuthenticated() && isUserDoc(userId)
+        && request.resource.data.userId == request.auth.uid
+        && request.resource.data.language != null
+        && request.resource.data.voiceEnabled is bool;
+
+      // User can update only their own preferences
+      allow update: if isAuthenticated() && isUserDoc(userId)
+        && request.resource.data.userId == request.auth.uid;
+
+      // User cannot delete their preferences (set to defaults instead)
+      allow delete: if false;
+    }
+
+    // ============================================
+    // Deny everything else (explicit deny)
+    // ============================================
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}

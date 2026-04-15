@@ -1,0 +1,116 @@
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap');
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --saathi-primary: #7C3D18;
+  --saathi-accent: #D4843A;
+  --saathi-bg: #FDF6EC;
+  --saathi-border: #E8C99A;
+}
+
+@layer base {
+  html {
+    @apply scroll-smooth;
+  }
+
+  body {
+    @apply bg-saathi-50 text-stone-800 font-sans antialiased;
+    background-image: url("data:image/svg+xml,%3Csvg width='60' height='60' viewBox='0 0 60 60' xmlns='http://www.w3.org/2000/svg'%3E%3Cg fill='none' fill-rule='evenodd'%3E%3Cg fill='%23D4843A' fill-opacity='0.03'%3E%3Cpath d='M36 34v-4h-2v4h-4v2h4v4h2v-4h4v-2h-4zm0-30V0h-2v4h-4v2h4v4h2V6h4V4h-4zM6 34v-4H4v4H0v2h4v4h2v-4h4v-2H6zM6 4V0H4v4H0v2h4v4h2V6h4V4H6z'/%3E%3C/g%3E%3C/g%3E%3C/svg%3E");
+  }
+
+  * {
+    @apply box-border;
+  }
+}
+
+@layer components {
+  .btn-primary {
+    @apply px-5 py-2.5 bg-saathi-700 text-white rounded-xl font-semibold text-sm hover:bg-saathi-600 active:bg-saathi-800 transition-all shadow-sm hover:shadow-saathi disabled:opacity-50 disabled:cursor-not-allowed;
+  }
+
+  .btn-secondary {
+    @apply px-5 py-2.5 bg-saathi-100 text-saathi-700 rounded-xl font-semibold text-sm hover:bg-saathi-200 active:bg-saathi-300 transition-all;
+  }
+
+  .btn-outline {
+    @apply px-5 py-2.5 border-2 border-saathi-300 text-saathi-700 rounded-xl font-semibold text-sm hover:bg-saathi-50 hover:border-saathi-500 transition-all;
+  }
+
+  .card {
+    @apply bg-white rounded-2xl border border-saathi-100 shadow-sm;
+  }
+
+  .card-hover {
+    @apply bg-white rounded-2xl border border-saathi-100 shadow-sm hover:shadow-saathi hover:border-saathi-200 transition-all cursor-pointer;
+  }
+
+  .input-field {
+    @apply w-full px-4 py-3 bg-cream-100 border border-saathi-200 rounded-xl text-stone-800 placeholder-stone-400 focus:outline-none focus:border-saathi-500 focus:ring-2 focus:ring-saathi-500/20 transition-all text-sm;
+  }
+
+  .label {
+    @apply block text-sm font-medium text-stone-700 mb-1.5;
+  }
+
+  .section-title {
+    @apply text-2xl sm:text-3xl font-bold text-saathi-800;
+  }
+
+  .section-subtitle {
+    @apply text-stone-500 text-base mt-2;
+  }
+}
+
+/* Custom scrollbar */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+::-webkit-scrollbar-track {
+  background: #F9E8D0;
+  border-radius: 10px;
+}
+::-webkit-scrollbar-thumb {
+  background: #C26820;
+  border-radius: 10px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: #7C3D18;
+}
+
+/* Loading skeleton */
+.skeleton {
+  @apply animate-pulse bg-saathi-100 rounded-lg;
+}
+
+/* Prose customization */
+.prose {
+  @apply text-stone-700;
+}
+.prose strong {
+  @apply text-stone-900 font-semibold;
+}
+.prose ul {
+  @apply space-y-1;
+}
+.prose li {
+  @apply text-stone-700;
+}
+
+/* Toast custom styles */
+.toast-success {
+  @apply bg-green-50 border border-green-200 text-green-800;
+}
+
+/* Animation utilities */
+.animate-fade-in {
+  animation: fadeIn 0.5s ease-out;
+}
+
+@keyframes fadeIn {
+  from { opacity: 0; transform: translateY(8px); }
+  to { opacity: 1; transform: translateY(0); }
+}
