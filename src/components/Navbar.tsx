@@ -16,6 +16,7 @@ export default function Navbar() {
   const pathname = usePathname();
   const [mobileOpen, setMobileOpen] = useState(false);
   const [profileOpen, setProfileOpen] = useState(false);
+  const [photoError, setPhotoError] = useState(false);
 
   const navLinks = [
     { href: "/dashboard", label: t("dashboard"), icon: LayoutDashboard },
@@ -72,9 +73,9 @@ export default function Navbar() {
                   onClick={() => setProfileOpen(!profileOpen)}
                   className="flex items-center gap-2 px-3 py-2 rounded-lg hover:bg-saathi-100 transition-colors"
                 >
-                  <div className="w-8 h-8 bg-saathi-200 rounded-full flex items-center justify-center">
-                    {user.photoURL ? (
-                      <img src={user.photoURL} alt="" className="w-8 h-8 rounded-full" />
+                  <div className="w-8 h-8 bg-saathi-200 rounded-full overflow-hidden flex items-center justify-center flex-shrink-0">
+                    {user.photoURL && !photoError ? (
+                      <img src={user.photoURL} alt="" className="w-8 h-8 rounded-full object-cover" onError={() => setPhotoError(true)} referrerPolicy="no-referrer" />
                     ) : (
                       <User className="w-4 h-4 text-saathi-700" />
                     )}
@@ -92,11 +93,18 @@ export default function Navbar() {
                       exit={{ opacity: 0, y: -8 }}
                       className="absolute right-0 mt-2 w-48 bg-white rounded-xl shadow-saathi-lg border border-saathi-100 overflow-hidden"
                     >
-                      <div className="px-4 py-3 border-b border-saathi-100">
-                        <p className="text-sm font-medium text-saathi-800 truncate">
-                          {user.displayName || "User"}
-                        </p>
-                        <p className="text-xs text-saathi-500 truncate">{user.email}</p>
+                      <div className="px-4 py-3 border-b border-saathi-100 flex items-center gap-3">
+                        <div className="w-10 h-10 bg-saathi-200 rounded-full overflow-hidden flex items-center justify-center flex-shrink-0">
+                          {user.photoURL && !photoError ? (
+                            <img src={user.photoURL} alt="" className="w-10 h-10 object-cover" referrerPolicy="no-referrer" />
+                          ) : (
+                            <User className="w-5 h-5 text-saathi-700" />
+                          )}
+                        </div>
+                        <div className="min-w-0">
+                          <p className="text-sm font-medium text-saathi-800 truncate">{user.displayName || "User"}</p>
+                          <p className="text-xs text-saathi-500 truncate">{user.email}</p>
+                        </div>
                       </div>
                       <button
                         onClick={() => { logOut(); setProfileOpen(false); }}

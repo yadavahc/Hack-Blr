@@ -1,8 +1,8 @@
 "use client";
 
-import { useState, useEffect, useCallback } from "react";
+import { useState, useRef, useCallback } from "react";
 import { motion, AnimatePresence } from "framer-motion";
-import { Mic, MicOff, X, Volume2, Phone } from "lucide-react";
+import { Mic, MicOff, X, Volume2, Loader2 } from "lucide-react";
 import { useLanguage } from "@/context/LanguageContext";
 import toast from "react-hot-toast";
 
@@ -11,113 +11,145 @@ interface VoiceAssistantProps {
   onTranscript?: (text: string) => void;
 }
 
-type CallStatus = "idle" | "connecting" | "active" | "ended";
+type Status = "idle" | "listening" | "processing" | "speaking";
+
+const LANG_CODE: Record<string, string> = {
+  en: "en-IN", hi: "hi-IN", kn: "kn-IN", ta: "ta-IN", te: "te-IN",
+};
+
+function stripMarkdown(text: string): string {
+  return text
+    .replace(/#{1,6}\s/g, "").replace(/\*\*(.*?)\*\*/g, "$1")
+    .replace(/\*(.*?)\*/g, "$1").replace(/`(.*?)`/g, "$1")
+    .replace(/\[(.*?)\]\(.*?\)/g, "$1").replace(/^\s*[-*+]\s/gm, "")
+    .replace(/^\s*\d+\.\s/gm, "").trim();
+}
 
 export default function VoiceAssistant({ documentContext, onTranscript }: VoiceAssistantProps) {
   const { t, language } = useLanguage();
-  const [status, setStatus] = useState<CallStatus>("idle");
+  const [status, setStatus] = useState<Status>("idle");
   const [isExpanded, setIsExpanded] = useState(false);
   const [transcript, setTranscript] = useState("");
-  const [vapiInstance, setVapiInstance] = useState<unknown>(null);
-  const [isSpeaking, setIsSpeaking] = useState(false);
-  const [volume, setVolume] = useState(0);
+  const [response, setResponse] = useState("");
+  const [chatHistory, setChatHistory] = useState<{ role: "user" | "assistant"; content: string }[]>([]);
 
-  const initVapi = useCallback(async () => {
+  const recognitionRef = useRef<unknown>(null);
+  const audioRef = useRef<HTMLAudioElement | null>(null);
+
+  const stopAudio = useCallback(() => {
+    if (audioRef.current) { audioRef.current.pause(); audioRef.current = null; }
+    window.speechSynthesis?.cancel();
+  }, []);
+
+  const processAndRespond = useCallback(async (userText: string) => {
+    setStatus("processing");
+    setTranscript(userText);
+    onTranscript?.(userText);
+
     try {
-      const { default: Vapi } = await import("@vapi-ai/web");
-      const publicKey = process.env.NEXT_PUBLIC_VAPI_PUBLIC_KEY;
-      if (!publicKey) {
-        toast.error("Voice assistant not configured");
-        return null;
+      // Step 1: Gemini chat response
+      const newHistory = [...chatHistory, { role: "user" as const, content: userText }];
+      const chatRes = await fetch("/api/chat", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          question: userText,
+          context: documentContext || "",
+          history: chatHistory.slice(-6),
+          language,
+        }),
+      });
+      const chatData = await chatRes.json();
+      const aiText = chatData.answer || "Sorry, I could not get a response.";
+      setResponse(aiText);
+      setChatHistory([...newHistory, { role: "assistant", content: aiText }]);
+
+      // Step 2: TTS via Sarvam
+      setStatus("speaking");
+      const ttsRes = await fetch("/api/tts", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ text: stripMarkdown(aiText), language }),
+      });
+      const ttsData = await ttsRes.json();
+
+      if (ttsData.audio && ttsData.provider === "sarvam") {
+        const audio = new Audio(ttsData.audio);
+        audioRef.current = audio;
+        audio.onended = () => { setStatus("idle"); audioRef.current = null; };
+        audio.onerror = () => { setStatus("idle"); audioRef.current = null; };
+        await audio.play();
+      } else {
+        // Browser TTS fallback
+        const utterance = new SpeechSynthesisUtterance(stripMarkdown(aiText));
+        utterance.lang = LANG_CODE[language] || "en-IN";
+        utterance.rate = 0.9;
+        utterance.onend = () => setStatus("idle");
+        utterance.onerror = () => setStatus("idle");
+        window.speechSynthesis?.speak(utterance);
       }
-      const vapi = new Vapi(publicKey);
-
-      vapi.on("call-start", () => setStatus("active"));
-      vapi.on("call-end", () => { setStatus("ended"); setTimeout(() => setStatus("idle"), 2000); });
-      vapi.on("speech-start", () => setIsSpeaking(true));
-      vapi.on("speech-end", () => setIsSpeaking(false));
-      vapi.on("volume-level", (v: number) => setVolume(v));
-      vapi.on("message", (msg: { type: string; role: string; transcript: string }) => {
-        if (msg.type === "transcript" && msg.role === "user") {
-          setTranscript(msg.transcript);
-          onTranscript?.(msg.transcript);
-        }
-      });
-      vapi.on("error", (e: Error) => {
-        console.error("Vapi error:", e);
-        toast.error("Voice assistant error");
-        setStatus("idle");
-      });
-
-      setVapiInstance(vapi);
-      return vapi;
     } catch (err) {
-      console.error("Failed to init Vapi:", err);
-      return null;
-    }
-  }, [onTranscript]);
-
-  const startCall = async () => {
-    setStatus("connecting");
-    const vapi = vapiInstance || (await initVapi());
-    if (!vapi) { setStatus("idle"); return; }
-
-    const langInstructions =
-      language === "kn" ? "Speak in Kannada language."
-      : language === "hi" ? "Speak in Hindi language."
-      : language === "ta" ? "Speak in Tamil language."
-      : language === "te" ? "Speak in Telugu language."
-      : "Speak in simple English.";
-
-    const firstMessage =
-      language === "kn" ? "ನಮಸ್ಕಾರ! ನಾನು ಲೀಗಲ್ ಸಾಥಿ. ನಿಮಗೆ ಹೇಗೆ ಸಹಾಯ ಮಾಡಲಿ?"
-      : language === "hi" ? "नमस्ते! मैं लीगल साथी हूँ। आपकी कैसे मदद करूँ?"
-      : language === "ta" ? "வணக்கம்! நான் லீகல் சாத்தி. எப்படி உதவட்டும்?"
-      : language === "te" ? "నమస్కారం! నేను లీగల్ సాథి. మీకు ఎలా సహాయం చేయగలను?"
-      : "Hello! I'm Legal Saathi. How can I help you understand your document today?";
-
-    try {
-      await (vapi as {
-        start: (config: {
-          model: { provider: string; model: string; messages: Array<{role: string; content: string}> };
-          voice: { provider: string; voiceId: string };
-          firstMessage: string;
-        }) => Promise<void>
-      }).start({
-        model: {
-          provider: "anthropic",
-          model: "claude-haiku-4-5-20251001",
-          messages: [
-            {
-              role: "system",
-              content: `You are Legal Saathi, a helpful legal assistant for rural users in India. ${langInstructions}
-              Explain things in very simple terms. Use everyday examples.
-              ${documentContext ? `Document context: ${documentContext.substring(0, 1000)}` : ""}
-              Keep responses short and clear. Always offer to explain more if needed.`,
-            },
-          ],
-        },
-        voice: {
-          provider: "11labs",
-          voiceId: language === "hi" || language === "kn" || language === "ta" || language === "te"
-            ? "pNInz6obpgDQGcFmaJgB"
-            : "21m00Tcm4TlvDq8ikWAM",
-        },
-        firstMessage,
-      });
-    } catch (err) {
-      console.error("Failed to start call:", err);
-      toast.error("Could not start voice call");
+      console.error("Voice assistant error:", err);
+      toast.error("Could not get a response. Please try again.");
       setStatus("idle");
     }
+  }, [language, documentContext, chatHistory, onTranscript]);
+
+  const startListening = useCallback(() => {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const SR = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
+    if (!SR) {
+      toast.error("Voice input not supported in this browser. Please use Chrome.");
+      return;
+    }
+    stopAudio();
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const recognition = new SR() as any;
+    recognition.lang = LANG_CODE[language] || "en-IN";
+    recognition.continuous = false;
+    recognition.interimResults = true;
+
+    recognition.onstart = () => { setStatus("listening"); setTranscript(""); setResponse(""); };
+
+    recognition.onresult = (event: { results: SpeechRecognitionResultList }) => {
+      const text = Array.from(event.results).map((r) => r[0].transcript).join("");
+      setTranscript(text);
+      if (event.results[event.results.length - 1].isFinal && text.trim()) {
+        recognition.stop();
+        processAndRespond(text.trim());
+      }
+    };
+
+    recognition.onerror = (e: { error: string }) => {
+      setStatus("idle");
+      if (e.error !== "no-speech") toast.error("Could not hear you. Please try again.");
+    };
+
+    recognition.onend = () => { if (status === "listening") setStatus("idle"); };
+
+    recognition.start();
+    recognitionRef.current = recognition;
+  }, [language, stopAudio, processAndRespond, status]);
+
+  const stopListening = useCallback(() => {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    (recognitionRef.current as any)?.stop();
+    setStatus("idle");
+  }, []);
+
+  const handleMicClick = () => {
+    if (status === "listening") { stopListening(); }
+    else if (status === "speaking") { stopAudio(); setStatus("idle"); }
+    else if (status === "idle") { startListening(); }
   };
 
-  const endCall = async () => {
-    if (vapiInstance) {
-      await (vapiInstance as { stop: () => Promise<void> }).stop();
-    }
-    setStatus("ended");
-  };
+  const langLabel = (
+    { kn: "ಕನ್ನಡ • ಹಿಂದಿ • ತಮಿಳು • ತೆಲುಗು • ಇಂಗ್ಲಿಷ್", hi: "कन्नड़ • हिंदी • तमिल • तेलुगु • अंग्रेज़ी", ta: "கன்னடம் • இந்தி • தமிழ் • தெலுங்கு • ஆங்கிலம்", te: "కన్నడ • హిందీ • తమిళం • తెలుగు • ఇంగ్లీష్", en: "Kannada • Hindi • Tamil • Telugu • English" } as Record<string, string>
+  )[language] || "Kannada • Hindi • Tamil • Telugu • English";
+
+  const statusLabel = (
+    { idle: t("startVoice"), listening: t("recording"), processing: "Processing...", speaking: t("speaking") } as Record<Status, string>
+  )[status];
 
   const bars = Array.from({ length: 5 }, (_, i) => i);
 
@@ -129,22 +161,19 @@ export default function VoiceAssistant({ documentContext, onTranscript }: VoiceA
         whileHover={{ scale: 1.05 }}
         whileTap={{ scale: 0.95 }}
         className={`fixed bottom-6 right-6 z-50 w-14 h-14 rounded-full shadow-saathi-lg flex items-center justify-center transition-all ${
-          status === "active"
-            ? "bg-red-500 hover:bg-red-600"
-            : "bg-saathi-700 hover:bg-saathi-600"
+          status === "listening" ? "bg-red-500" : status === "speaking" ? "bg-amber-500" : "bg-saathi-700 hover:bg-saathi-600"
         }`}
       >
-        {status === "active" ? (
+        {status === "listening" ? (
           <motion.div className="flex gap-0.5 items-center">
-            {bars.map((i) => (
-              <motion.div
-                key={i}
-                className="w-0.5 bg-white rounded-full"
-                animate={{ height: [8, 16 + Math.random() * 12, 8] }}
-                transition={{ duration: 0.6, repeat: Infinity, delay: i * 0.1 }}
-              />
-            ))}
+            {bars.map((i) => <motion.div key={i} className="w-0.5 bg-white rounded-full" animate={{ height: [8, 16, 8] }} transition={{ duration: 0.4, repeat: Infinity, delay: i * 0.08 }} />)}
           </motion.div>
+        ) : status === "speaking" ? (
+          <motion.div animate={{ scale: [1, 1.15, 1] }} transition={{ duration: 0.8, repeat: Infinity }}>
+            <Volume2 className="w-6 h-6 text-white" />
+          </motion.div>
+        ) : status === "processing" ? (
+          <Loader2 className="w-6 h-6 text-white animate-spin" />
         ) : (
           <Mic className="w-6 h-6 text-white" />
         )}
@@ -159,7 +188,6 @@ export default function VoiceAssistant({ documentContext, onTranscript }: VoiceA
             exit={{ opacity: 0, scale: 0.9, y: 20 }}
             className="fixed bottom-24 right-6 z-50 w-72 bg-white rounded-2xl shadow-saathi-lg border border-saathi-100 overflow-hidden"
           >
-            {/* Header */}
             <div className="bg-saathi-700 px-4 py-3 flex items-center justify-between">
               <div className="flex items-center gap-2">
                 <Volume2 className="w-5 h-5 text-saathi-200" />
@@ -170,87 +198,66 @@ export default function VoiceAssistant({ documentContext, onTranscript }: VoiceA
               </button>
             </div>
 
-            {/* Content */}
             <div className="p-4">
-              {/* Status Indicator */}
+              {/* Visualizer */}
               <div className="flex items-center justify-center mb-4">
                 <div className={`relative w-20 h-20 rounded-full flex items-center justify-center ${
-                  status === "active" ? "bg-red-50" : "bg-saathi-50"
+                  status === "listening" ? "bg-red-50" : status === "speaking" ? "bg-amber-50" : "bg-saathi-50"
                 }`}>
-                  {status === "active" && (
+                  {(status === "listening" || status === "speaking") && (
                     <motion.div
-                      className="absolute inset-0 rounded-full bg-red-200"
+                      className={`absolute inset-0 rounded-full ${status === "listening" ? "bg-red-200" : "bg-amber-200"}`}
                       animate={{ scale: [1, 1.3, 1], opacity: [0.5, 0, 0.5] }}
                       transition={{ duration: 2, repeat: Infinity }}
                     />
                   )}
-                  {status === "connecting" ? (
-                    <motion.div
-                      className="w-10 h-10 border-3 border-saathi-600 border-t-transparent rounded-full"
-                      animate={{ rotate: 360 }}
-                      transition={{ duration: 1, repeat: Infinity, ease: "linear" }}
-                    />
-                  ) : status === "active" ? (
+                  {status === "processing" ? (
+                    <Loader2 className="w-10 h-10 text-saathi-600 animate-spin" />
+                  ) : status === "listening" ? (
                     <div className="flex gap-1 items-end h-8">
-                      {bars.map((i) => (
-                        <motion.div
-                          key={i}
-                          className="w-1.5 bg-red-500 rounded-full"
-                          animate={{ height: [4, 20 + volume * 10, 4] }}
-                          transition={{ duration: 0.4, repeat: Infinity, delay: i * 0.1 }}
-                        />
-                      ))}
+                      {bars.map((i) => <motion.div key={i} className="w-1.5 bg-red-500 rounded-full" animate={{ height: [4, 20, 4] }} transition={{ duration: 0.4, repeat: Infinity, delay: i * 0.1 }} />)}
+                    </div>
+                  ) : status === "speaking" ? (
+                    <div className="flex gap-1 items-end h-8">
+                      {bars.map((i) => <motion.div key={i} className="w-1.5 bg-amber-500 rounded-full" animate={{ height: [4, 20, 4] }} transition={{ duration: 0.5, repeat: Infinity, delay: i * 0.1 }} />)}
                     </div>
                   ) : (
-                    <Mic className={`w-8 h-8 ${status === "ended" ? "text-saathi-300" : "text-saathi-600"}`} />
+                    <Mic className="w-8 h-8 text-saathi-600" />
                   )}
                 </div>
               </div>
 
-              {/* Status Text */}
-              <p className="text-center text-sm font-medium text-saathi-700 mb-1">
-                {status === "idle" && t("startVoice")}
-                {status === "connecting" && "Connecting..."}
-                {status === "active" && (isSpeaking ? t("speaking") : t("listening"))}
-                {status === "ended" && "Call ended"}
-              </p>
+              <p className="text-center text-sm font-medium text-saathi-700 mb-2">{statusLabel}</p>
 
-              {/* Transcript */}
               {transcript && (
-                <div className="mt-2 p-2 bg-saathi-50 rounded-lg text-xs text-saathi-600">
+                <div className="mb-2 p-2 bg-saathi-50 rounded-lg text-xs text-saathi-700 border border-saathi-100">
+                  <span className="font-semibold text-saathi-500 block mb-0.5">You:</span>
                   "{transcript}"
                 </div>
               )}
+              {response && (
+                <div className="mb-2 p-2 bg-amber-50 rounded-lg text-xs text-stone-700 border border-amber-100 max-h-24 overflow-y-auto">
+                  <span className="font-semibold text-amber-700 block mb-0.5">Saathi:</span>
+                  {response.substring(0, 200)}{response.length > 200 && "..."}
+                </div>
+              )}
 
-              {/* Controls */}
-              <div className="mt-4 flex gap-2">
-                {status === "idle" || status === "ended" ? (
-                  <button
-                    onClick={startCall}
-                    className="flex-1 flex items-center justify-center gap-2 py-2.5 bg-saathi-700 text-white rounded-xl text-sm font-medium hover:bg-saathi-600 transition-colors"
-                  >
-                    <Phone className="w-4 h-4" />
-                    {t("startVoice")}
-                  </button>
-                ) : (
-                  <button
-                    onClick={endCall}
-                    disabled={status === "connecting"}
-                    className="flex-1 flex items-center justify-center gap-2 py-2.5 bg-red-500 text-white rounded-xl text-sm font-medium hover:bg-red-600 transition-colors disabled:opacity-50"
-                  >
-                    <MicOff className="w-4 h-4" />
-                    {t("stopVoice")}
-                  </button>
-                )}
-              </div>
+              <button
+                onClick={handleMicClick}
+                disabled={status === "processing"}
+                className={`w-full flex items-center justify-center gap-2 py-2.5 rounded-xl text-sm font-medium transition-colors disabled:opacity-50 ${
+                  status === "listening" ? "bg-red-500 hover:bg-red-600 text-white"
+                  : status === "speaking" ? "bg-amber-500 hover:bg-amber-600 text-white"
+                  : "bg-saathi-700 hover:bg-saathi-600 text-white"
+                }`}
+              >
+                {status === "listening" ? <><MicOff className="w-4 h-4" /> {t("stopVoice")}</>
+                : status === "speaking" ? <><Volume2 className="w-4 h-4" /> Stop Speaking</>
+                : status === "processing" ? <><Loader2 className="w-4 h-4 animate-spin" /> Processing...</>
+                : <><Mic className="w-4 h-4" /> {t("startVoice")}</>}
+              </button>
 
-              <p className="mt-3 text-center text-xs text-saathi-400">
-                {language === "kn" ? "ಕನ್ನಡ • ಹಿಂದಿ • ತಮಿಳು • ತೆಲುಗು • ಇಂಗ್ಲಿಷ್"
-                : language === "hi" ? "कन्नड़ • हिंदी • तमिल • तेलुगु • अंग्रेज़ी"
-                : language === "ta" ? "கன்னடம் • இந்தி • தமிழ் • தெலுங்கு • ஆங்கிலம்"
-                : language === "te" ? "కన్నడ • హిందీ • తమిళం • తెలుగు • ఇంగ్లీష్"
-                : "Kannada • Hindi • Tamil • Telugu • English"}
-              </p>
+              <p className="mt-3 text-center text-xs text-saathi-400">{langLabel}</p>
             </div>
           </motion.div>
         )}
